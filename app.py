@@ -97,33 +97,34 @@ def register():
 # 🚨 ВХОД (SQL Injection + Brute Force)
 # ============================================
 @app.route('/login', methods=['GET', 'POST'])
+@app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
         username = request.form.get('username', '')
         password = request.form.get('password', '')
         
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Уязвимый запрос
+        query = f"SELECT * FROM users WHERE username = '{username}' AND password = '{password}'"
+        
         try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            
-            # 🔴 УЯЗВИМОСТЬ 6: SQL Injection в WHERE
-            query = f"SELECT * FROM users WHERE username = '{username}' AND password = '{password}'"
             cursor.execute(query)
             user = cursor.fetchone()
-            conn.close()
-            
-            if user:
-                session['user_id'] = user['id']
-                session['username'] = user['username']
-                # 🔴 УЯЗВИМОСТЬ 7: Нет защиты от перебора сессий
-                flash('Вы вошли!', 'success')
-                return redirect(url_for('profile'))
-            else:
-                # 🔴 УЯЗВИМОСТЬ 8: Сообщение говорит какая часть неверна
-                flash('Неверные данные', 'danger')
         except Exception as e:
-            flash(f'Ошибка БД: {str(e)}', 'danger')
-            print(f"❌ Ошибка в login: {e}")
+            # 🔴 ВАЖНО: Выводим ошибку явно, чтобы sqlmap её увидел
+            # Или просто падаем с 500 ошибкой, что тоже информативно для сканера
+            return f"<h1>Database Error</h1><pre>{str(e)}</pre>", 500
+        
+        conn.close()
+        
+        if user:
+            session['user_id'] = user['id']
+            session['username'] = user['username']
+            return redirect(url_for('profile'))
+        else:
+            return "<h1>Login Failed</h1><p>Invalid credentials</p>", 200
     
     return render_template_string('''
         <h1>Вход</h1>
@@ -282,3 +283,4 @@ if __name__ == '__main__':
     
     # 🔴 УЯЗВИМОСТЬ 17: Debug режим + доступ снаружи контейнера
     app.run(debug=True, host='0.0.0.0', port=5000)
+
