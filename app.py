@@ -3,40 +3,42 @@ import sqlite3
 import os
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'hardcoded-secret-key'  # УЯЗВИМОСТЬ 1: Жёстко заданный ключ
+app.config['SECRET_KEY'] = 'insecure-learning-key-only'  # ⚠️ Только для локальных тестов!
 
-# Инициализация БД
-def init_db():
-    conn = sqlite3.connect('users.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY,
-            username TEXT,
-            password TEXT  # УЯЗВИМОСТЬ 2: Пароли без хэширования
-        )
-    ''')
-    conn.commit()
-    conn.close()
+# 🔹 ПОДКЛЮЧЕНИЕ К СУЩЕСТВУЮЩЕЙ БД
+# Ищет файл test_db.sqlite или test_db.db в текущей директории
+DB_FILENAME = 'test_db.sqlite'  # Или 'test_db.db', в зависимости от вашего файла
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), DB_FILENAME)
+
+def get_db_connection():
+    """Подключение к базе данных test_db"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 @app.route('/')
 def index():
     if 'user_id' in session:
         return redirect(url_for('profile'))
     return render_template_string('''
-        <h1>Уязвимое приложение</h1>
+        <h1>🚨 Уязвимое приложение (ТОЛЬКО LOCALHOST!)</h1>
+        <p>База данных: <strong>test_db</strong></p>
+        <p>Путь: <code>{{ db_path }}</code></p>
         <a href="{{ url_for('login') }}">Войти</a> | 
         <a href="{{ url_for('register') }}">Регистрация</a>
-    ''')
+    ''', db_path=DB_PATH)
 
-# УЯЗВИМОСТЬ 3: SQL-инъекция в регистрации
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     if request.method == 'POST':
         username = request.form.get('username', '')
         password = request.form.get('password', '')
         
-        conn = sqlite3.connect('users.db')
+        if not username or not password:
+            flash('Введите имя и пароль', 'danger')
+            return redirect(url_for('register'))
+        
+        conn = get_db_connection()
         cursor = conn.cursor()
         
         # ❌ SQL INJECTION: Прямая конкатенация
@@ -48,7 +50,7 @@ def register():
             conn.close()
             return redirect(url_for('register'))
         
-        # ❌ SQL INJECTION: Вставка данных без экранирования
+        # ❌ SQL INJECTION: Вставка без экранирования
         insert_query = f"INSERT INTO users (username, password) VALUES ('{username}', '{password}')"
         cursor.execute(insert_query)
         conn.commit()
@@ -60,21 +62,20 @@ def register():
     return render_template_string('''
         <h1>Регистрация</h1>
         <form method="POST">
-            <input type="text" name="username" placeholder="Имя пользователя">
-            <input type="password" name="password" placeholder="Пароль">
+            <input type="text" name="username" placeholder="Имя пользователя" required>
+            <input type="password" name="password" placeholder="Пароль" required>
             <button type="submit">Зарегистрироваться</button>
         </form>
         <a href="{{ url_for('login') }}">Войти</a>
     ''')
 
-# УЯЗВИМОСТЬ 4: SQL-инъекция в логине
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
         username = request.form.get('username', '')
         password = request.form.get('password', '')
         
-        conn = sqlite3.connect('users.db')
+        conn = get_db_connection()
         cursor = conn.cursor()
         
         # ❌ SQL INJECTION: Прямая конкатенация в WHERE
@@ -84,8 +85,8 @@ def login():
         conn.close()
         
         if user:
-            session['user_id'] = user[0]
-            session['username'] = user[1]
+            session['user_id'] = user['id']
+            session['username'] = user['username']
             flash('Вы вошли!', 'success')
             return redirect(url_for('profile'))
         else:
@@ -94,14 +95,13 @@ def login():
     return render_template_string('''
         <h1>Вход</h1>
         <form method="POST">
-            <input type="text" name="username" placeholder="Имя пользователя">
-            <input type="password" name="password" placeholder="Пароль">
+            <input type="text" name="username" placeholder="Имя пользователя" required>
+            <input type="password" name="password" placeholder="Пароль" required>
             <button type="submit">Войти</button>
         </form>
         <a href="{{ url_for('register') }}">Регистрация</a>
     ''')
 
-# УЯЗВИМОСТЬ 5: XSS в профиле
 @app.route('/profile')
 def profile():
     if 'user_id' not in session:
@@ -109,19 +109,39 @@ def profile():
     
     username = session.get('username', 'Гость')
     
-    # ❌ XSS: Отсутствие экранирования (если использовать |safe)
     return render_template_string('''
         <h1>Личный кабинет</h1>
         <p>Привет, {{ username }}!</p>
         <p>Ваш ID: {{ session['user_id'] }}</p>
+        <p>База данных: <strong>test_db</strong></p>
         <a href="{{ url_for('logout') }}">Выйти</a>
-    ''', username=username, session=session)
+    ''', username=username)
 
 @app.route('/logout')
 def logout():
     session.clear()
+    flash('Вы вышли из системы', 'info')
     return redirect(url_for('index'))
 
 if __name__ == '__main__':
-    init_db()
-    app.run(debug=True, host='0.0.0.0', port=5000)  # УЯЗВИМОСТЬ 6: Debug в продакшене
+    # Проверка наличия БД при старте
+    if os.path.exists(DB_PATH):
+        print(f"✅ База данных найдена: {DB_PATH}")
+        
+        # Проверка таблицы users
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
+        if cursor.fetchone():
+            print("✅ Таблица 'users' существует")
+            cursor.execute("SELECT COUNT(*) FROM users")
+            count = cursor.fetchone()[0]
+            print(f"✅ Записей в таблице: {count}")
+        else:
+            print("⚠️ Таблица 'users' не найдена!")
+        conn.close()
+    else:
+        print(f"❌ База данных не найдена: {DB_PATH}")
+        print("💡 Убедитесь, что файл test_db.sqlite находится в той же папке, что и app.py")
+    
+    app.run(debug=True, host='127.0.0.1', port=5000)
